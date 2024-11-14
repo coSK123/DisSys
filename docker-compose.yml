@@ -1,0 +1,121 @@
+
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  prometheus:
+    image: prom/prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+    depends_on:
+      - frontend_service
+      - order_service
+      - doener_service
+      - invoice_service
+
+  grafana:
+    image: grafana/grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - grafana_data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    depends_on:
+      - prometheus
+
+  frontend_service:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    command: uvicorn frontend_service:app --host 0.0.0.0 --port 8080 --reload
+    ports:
+      - "8080:8080"
+    volumes:
+      - .:/app
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - SERVICE_NAME=frontend_service
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  order_service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: uvicorn order_service:app --host 0.0.0.0 --port 8081 --reload
+    ports:
+      - "8081:8081"
+    volumes:
+      - .:/app
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - SERVICE_NAME=order_service
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  doener_service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: uvicorn doener_service:app --host 0.0.0.0 --port 8082 --reload
+    ports:
+      - "8082:8082"
+    volumes:
+      - .:/app
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - SERVICE_NAME=doener_service
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  invoice_service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: uvicorn invoice_service:app --host 0.0.0.0 --port 8083 --reload
+    ports:
+      - "8083:8083"
+    volumes:
+      - .:/app
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - SERVICE_NAME=invoice_service
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+volumes:
+  rabbitmq_data:
+  prometheus_data:
+  grafana_data:

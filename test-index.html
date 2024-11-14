@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Döner Order System</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .order-form {
+            margin-bottom: 20px;
+            padding: 20px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        .updates {
+            padding: 20px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            min-height: 200px;
+        }
+        .update-item {
+            margin: 10px 0;
+            padding: 10px;
+            background-color: #f5f5f5;
+            border-radius: 4px;
+        }
+        button {
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+    </style>
+</head>
+<body>
+    <h1>Döner Order System</h1>
+    
+    <div class="order-form">
+        <h2>Place New Order</h2>
+        <input type="text" id="customerId" placeholder="Customer ID" value="CUST123">
+        <button onclick="placeOrder()">Place Order</button>
+    </div>
+
+    <div class="updates">
+        <h2>Order Updates</h2>
+        <div id="updatesList"></div>
+    </div>
+
+    <script>
+        let ws = null;
+
+        function connect(orderId) {
+            ws = new WebSocket(`ws://localhost:8000/ws/${orderId}`);
+            
+            ws.onmessage = function(event) {
+                const update = JSON.parse(event.data);
+                addUpdate(update);
+            };
+
+            ws.onclose = function() {
+                console.log('WebSocket connection closed');
+            };
+
+            ws.onerror = function(error) {
+                console.error('WebSocket error:', error);
+            };
+        }
+
+        async function placeOrder() {
+            const customerId = document.getElementById('customerId').value;
+            
+            try {
+                const response = await fetch('http://localhost:8000/order/doener', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        customer_id: customerId,
+                        details: {
+                            notes: "Extra sauce please"
+                        }
+                    }),
+                });
+
+                const data = await response.json();
+                console.log('Order placed:', data);
+                
+                // Connect to WebSocket for updates
+                connect(data.order_id);
+                
+                // Add initial update
+                addUpdate({
+                    message_type: 'ORDER_CREATED',
+                    order_id: data.order_id,
+                    timestamp: new Date().toISOString(),
+                    payload: {
+                        status: 'Order placed successfully'
+                    }
+                });
+                
+            } catch (error) {
+                console.error('Error placing order:', error);
+            }
+        }
+
+        function addUpdate(update) {
+            const updatesList = document.getElementById('updatesList');
+            const updateElement = document.createElement('div');
+            updateElement.className = 'update-item';
+            
+            const timestamp = new Date(update.timestamp).toLocaleTimeString();
+            
+            updateElement.innerHTML = `
+                <strong>${update.message_type}</strong><br>
+                Time: ${timestamp}<br>
+                Status: ${update.payload.status}<br>
+                ${update.payload.shop ? `Shop: ${update.payload.shop.name}<br>` : ''}
+                ${update.payload.price ? `Price: €${update.payload.price}<br>` : ''}
+                ${update.payload.invoice_id ? `Invoice: ${update.payload.invoice_id}<br>` : ''}
+            `;
+            
+            updatesList.insertBefore(updateElement, updatesList.firstChild);
+        }
+    </script>
+</body>
+</html>
