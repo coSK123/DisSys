@@ -41,15 +41,13 @@ def create_invoice(ch, method, properties, body):
             }
         )
         
+        print(f"Created invoice for order {message['order_id']}")
         mq.publish("invoice_supplied", response.to_json())
-        ch.basic_ack(delivery_tag=method.delivery_tag)
         
     except json.JSONDecodeError as e:
         print(f"Error decoding message: {e}")
-        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
     except Exception as e:
         print(f"Error processing invoice: {e}")
-        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
 
 # Start consuming invoice requests
 mq.consume("invoice_requests", create_invoice)

@@ -30,6 +30,7 @@ class RabbitMQ:
         self._setup_logging()
         self._ensure_connection()
 
+
     def _setup_logging(self):
         self.logger = logging.getLogger(__name__)
         if not self.logger.handlers:
@@ -40,6 +41,12 @@ class RabbitMQ:
             handler.setFormatter(formatter)
             self.logger.addHandler(handler)
             self.logger.setLevel(logging.INFO)
+
+            # writing logs to file
+            file_handler = logging.FileHandler('rabbitmq.log')
+            file_handler.setFormatter(formatter)
+            self.logger.addHandler(file_handler)
+
 
     def _create_connection_params(self):
         return pika.ConnectionParameters(
@@ -112,6 +119,10 @@ class RabbitMQ:
 
     def publish(self, queue_name: str, message: Any) -> bool:
         """Publish message to queue with retry logic and error handling."""
+
+        # log message
+        self.logger.info(f"Publishing message to {queue_name}: {message}")
+
         for attempt in range(self.max_retries):
             try:
                 self._ensure_connection()
@@ -158,7 +169,6 @@ class RabbitMQ:
 
                 # Call the actual callback
                 callback(ch, method, properties, message)
-                ch.basic_ack(delivery_tag=method.delivery_tag)
                 
             except json.JSONDecodeError as e:
                 self.logger.error(f"Failed to decode message: {str(e)}")
@@ -174,7 +184,7 @@ class RabbitMQ:
                 self._channel.basic_consume(
                     queue=queue_name,
                     on_message_callback=wrapped_callback,
-                    auto_ack=False
+                    auto_ack=True
                 )
                 self.logger.info(f"Started consuming from {queue_name}")
                 self._channel.start_consuming()

@@ -50,16 +50,6 @@ def handle_order_request(ch, method, properties, body):
             message = json.loads(message_str)
         else:
             message = body  # Already a dict
-        
-        # Parse timestamp if it exists
-        timestamp = None
-        if 'timestamp' in message:
-            try:
-                timestamp = datetime.fromisoformat(message['timestamp'])
-            except (ValueError, TypeError):
-                timestamp = datetime.now()
-        else:
-            timestamp = datetime.now()
 
         # Create order in database
         db.create_order(message["order_id"], message.get("payload", {}))
@@ -110,6 +100,8 @@ def handle_doener_supplied(ch, method, properties, body):
             "shop": message["payload"]["shop"]
         }
     )
+
+    print(f"Order {message['order_id']} assigned to {message['payload']['shop']} - requesting invoice")
     mq.publish("invoice_requests", invoice_request.to_json())
 
 # Start consuming order requests

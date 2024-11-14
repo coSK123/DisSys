@@ -56,19 +56,22 @@ def handle_doener_supplied(message, shop):
 
 def handle_doener_request(ch, method, properties, body):
     try:
-        if isinstance(body, bytes):
-            message = json.loads(body.decode('utf-8'))
+        # Handle both dict and bytes/string inputs
+        if isinstance(body, (bytes, str)):
+            if isinstance(body, bytes):
+                message_str = body.decode('utf-8')
+            else:
+                message_str = body
+            message = json.loads(message_str)
         else:
-            message = json.loads(body)
+            message = body  # Already a dict
 
         asyncio.run(shop_finder.find_available_shop(message, handle_doener_supplied))
-        ch.basic_ack(delivery_tag=method.delivery_tag)
+        
     except json.JSONDecodeError as e:
         print(f"Error decoding message: {e}")
-        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
     except Exception as e:
         print(f"Error processing message: {e}")
-        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
 
 # Start consuming doener preparation requests
 mq.consume('doener_requests', handle_doener_request)

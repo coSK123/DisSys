@@ -73,6 +73,7 @@ async def handle_order_supplied(message: dict):
         status="ORDER_CREATED",
         details={"message": "Order has been created and is being processed"}
     )
+    print(f"Order {order_id} has been created")
     await manager.send_update(order_id, update.to_json())
 
 async def handle_doener_supplied(message: dict):
@@ -86,6 +87,7 @@ async def handle_doener_supplied(message: dict):
             "price": message["payload"]["price"]
         }
     )
+    print(f"Order {order_id} has been assigned to {message['payload']['shop']['name']}")
     await manager.send_update(order_id, update.to_json())
 
 async def handle_invoice_supplied(message: dict):
@@ -100,6 +102,7 @@ async def handle_invoice_supplied(message: dict):
             "status": "ready_for_payment"
         }
     )
+    print(f"Order {order_id} is ready for payment")
     await manager.send_update(order_id, update.to_json())
 
 # Message queue consumer that dispatches to WebSocket
@@ -116,6 +119,9 @@ async def process_queue_message(queue_name: str, message: dict):
 def setup_queue_consumer():
     def callback(ch, method, properties, body):
         try:
+
+            print(f"Received message: {body}")
+
             message = json.loads(body)
             queue_name = method.routing_key
             
@@ -125,18 +131,14 @@ def setup_queue_consumer():
             
             try:
                 loop.run_until_complete(process_queue_message(queue_name, message))
-                ch.basic_ack(delivery_tag=method.delivery_tag)
             except Exception as e:
                 print(f"Error processing message: {e}")
-                ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
             finally:
                 loop.close()
         except json.JSONDecodeError as e:
             print(f"Error decoding message: {e}")
-            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
         except Exception as e:
             print(f"Unexpected error: {e}")
-            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
 
     queues = ["order_supplied", "doener_supplied", "invoice_supplied"]
     mq.setup_consumers(queues, callback)
