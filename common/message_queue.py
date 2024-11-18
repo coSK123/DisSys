@@ -15,44 +15,90 @@ class RabbitMQ:
         self._channel = None
         self._lock = Lock()
         self.logger = structlog.get_logger()
-        self._setup_dlx()
-        self._ensure_connection()
+        
+        # Initialize connection with retries
+        retry_count = 0
+        last_error = None
+        while retry_count < 5:
+            try:
+                self._ensure_connection()
+                self._setup_dlx()
+                return
+            except Exception as e:
+                retry_count += 1
+                last_error = e
+                self.logger.warning(f"Connection attempt {retry_count} failed", error=str(e))
+                if retry_count < 5:
+                    time.sleep(5)  # Wait before retrying
+        
+        self.logger.error("Failed to initialize RabbitMQ after 5 attempts")
+        raise last_error
 
     def _setup_dlx(self):
+        """Set up Dead Letter Exchange with proper queue cleanup"""
         try:
             self._ensure_connection()
             
-            # Delete existing queues first
-            for queue_name in self.config.QUEUE_SETTINGS:
-                try:
-                    self._channel.queue_delete(queue=queue_name)
-                except Exception:
-                    pass
-            
-            # Declare the dead letter exchange
+            # First declare the exchange (not passive)
             self._channel.exchange_declare(
                 exchange=self.config.DLX_EXCHANGE,
                 exchange_type='direct',
-                durable=True
+                durable=True,
+                passive=False  # Create if doesn't exist
             )
-            
-            # Create dead letter queues for each main queue
+            self.logger.info(f"Exchange '{self.config.DLX_EXCHANGE}' setup successful")
+
+            # Set up queues
             for queue_name in self.config.QUEUE_SETTINGS:
-                dlq_name = f"{self.config.DLX_QUEUE_PREFIX}{queue_name}"
-                self._channel.queue_declare(queue=dlq_name, durable=True)
+                # Create DLQ
+                dlq_name = f"dlq.{queue_name}"
+                self._channel.queue_declare(
+                    queue=dlq_name,
+                    durable=True,
+                    passive=False  # Create if doesn't exist
+                )
+                
+                # Bind DLQ to exchange
                 self._channel.queue_bind(
                     queue=dlq_name,
                     exchange=self.config.DLX_EXCHANGE,
                     routing_key=queue_name
                 )
+                self.logger.info(f"Dead letter queue '{dlq_name}' setup successful")
+
+                # Create main queue
+                self._declare_queue(queue_name)
+                self.logger.info(f"Main queue '{queue_name}' setup successful")
+
+        except pika.exceptions.ChannelClosedByBroker as e:
+            self.logger.error("Channel closed by broker during DLX setup", error=str(e))
+            raise
         except Exception as e:
-            self.logger.error("dlx_setup_failed", error=str(e))
+            self.logger.error("Failed to set up DLX", error=str(e))
+            raise
+
+    def _declare_queue(self, queue_name: str):
+        """Declare a queue with dead letter exchange configuration"""
+        try:
+            result = self._channel.queue_declare(
+                queue=queue_name,
+                durable=True,
+                arguments={
+                    'x-dead-letter-exchange': self.config.DLX_EXCHANGE,
+                    'x-dead-letter-routing-key': queue_name
+                }
+            )
+            return result
+        except Exception as e:
+            self.logger.error(f"Failed to declare queue {queue_name}", error=str(e))
             raise
 
     def _create_connection_params(self):
+        """Create connection parameters with retry settings"""
         return pika.ConnectionParameters(
             host=self.config.RABBITMQ_HOST,
             port=self.config.RABBITMQ_PORT,
+            virtual_host='/',
             credentials=pika.PlainCredentials(
                 self.config.RABBITMQ_USER,
                 self.config.RABBITMQ_PASS
@@ -63,27 +109,8 @@ class RabbitMQ:
             retry_delay=5
         )
 
-    def _declare_queue(self, queue_name: str, **kwargs):
-        """Declare queue with dead letter exchange configuration."""
-        default_settings = self.config.QUEUE_SETTINGS.get(queue_name, {'durable': True})
-        settings = {**default_settings, **kwargs}
-        
-        try:
-            self._channel.queue_declare(
-                queue=queue_name,
-                durable=settings['durable'],
-                arguments={
-                    'x-dead-letter-exchange': self.config.DLX_EXCHANGE,
-                    'x-dead-letter-routing-key': queue_name
-                }
-            )
-        except Exception as e:
-            self.logger.error("queue_declaration_failed", 
-                            queue=queue_name, 
-                            error=str(e))
-            raise
-
     def _ensure_connection(self):
+        """Ensure connection and channel are available"""
         with self._lock:
             try:
                 if self._connection is None or self._connection.is_closed:
@@ -92,27 +119,18 @@ class RabbitMQ:
                     )
                     self._channel = self._connection.channel()
                     self._channel.basic_qos(prefetch_count=1)
-                    
-                    # Declare default queues
-                    for queue_name in self.config.QUEUE_SETTINGS:
-                        self._declare_queue(queue_name)
-                    
-                    self.logger.info("rabbitmq_connected")
+                    self.logger.info("RabbitMQ connection established")
             except Exception as e:
-                self.logger.error("connection_failed", error=str(e))
+                self.logger.error("Connection failed", error=str(e))
                 raise
 
     def publish(self, queue_name: str, message: Any) -> bool:
-        """Publish message with retry logic."""
-        self.logger.info("publishing_message", 
-                        queue=queue_name, 
-                        correlation_id=message.get('correlation_id'))
-
-        for attempt in range(self.config.MAX_RETRIES):
+        """Publish message to queue with retry logic"""
+        max_retries = 3
+        for attempt in range(max_retries):
             try:
                 self._ensure_connection()
                 
-                # Prepare message
                 if isinstance(message, dict):
                     message_body = json.dumps(message)
                 elif hasattr(message, 'to_json'):
@@ -120,8 +138,6 @@ class RabbitMQ:
                 else:
                     message_body = json.dumps(message)
 
-                self._declare_queue(queue_name)
-                
                 self._channel.basic_publish(
                     exchange='',
                     routing_key=queue_name,
@@ -132,68 +148,51 @@ class RabbitMQ:
                     )
                 )
                 return True
-                
             except Exception as e:
-                self.logger.error("publish_failed", 
-                                attempt=attempt + 1,
-                                error=str(e))
-                if attempt < self.config.MAX_RETRIES - 1:
-                    time.sleep(self.config.RETRY_DELAY)
-                    self._ensure_connection()
-                else:
+                last_error = e
+                if attempt == max_retries - 1:
+                    self.logger.error(f"Failed to publish to {queue_name} after {max_retries} attempts", error=str(e))
                     return False
+                time.sleep(1)
+                continue
 
-    def consume(self, queue_name: str, callback: Callable) -> None:
-        """Set up consumer with automatic reconnection."""
-        def wrapped_callback(ch, method, properties, body):
-            try:
-                if isinstance(body, bytes):
-                    message = json.loads(body.decode('utf-8'))
-                else:
-                    message = body
-
-                self.logger.info("message_received", 
-                               queue=queue_name,
-                               correlation_id=message.get('correlation_id'))
-
-                callback(ch, method, properties, message)
-                
-            except json.JSONDecodeError as e:
-                self.logger.error("message_decode_failed", 
-                                error=str(e))
-                ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
-            except Exception as e:
-                self.logger.error("message_processing_failed", 
-                                error=str(e))
-                ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
-
-        while True:
+    def consume(self, queue_name: str, callback: Callable):
+        """Set up consumer with automatic reconnection"""
+        max_retries = 3
+        for attempt in range(max_retries):
             try:
                 self._ensure_connection()
-                self._declare_queue(queue_name)
                 self._channel.basic_consume(
                     queue=queue_name,
-                    on_message_callback=wrapped_callback,
+                    on_message_callback=callback,
                     auto_ack=False
                 )
-                self.logger.info("consumer_started", queue=queue_name)
-                self._channel.start_consuming()
-                
+                self.logger.info(f"Consumer set up for {queue_name}")
+                break
             except Exception as e:
-                self.logger.error("consumer_error", 
-                                queue=queue_name,
-                                error=str(e))
-                time.sleep(self.config.RETRY_DELAY)
+                if attempt == max_retries - 1:
+                    self.logger.error(f"Failed to set up consumer for {queue_name} after {max_retries} attempts", error=str(e))
+                    raise
+                time.sleep(1)
+                continue
+
+    def start_consuming(self):
+        """Start consuming messages"""
+        try:
+            self.logger.info("Starting to consume messages")
+            self._channel.start_consuming()
+        except Exception as e:
+            self.logger.error("Error while consuming messages", error=str(e))
+            raise
 
     def close(self):
-        """Safely close connection."""
+        """Safely close connection"""
         with self._lock:
             try:
                 if self._channel and self._channel.is_open:
                     self._channel.close()
                 if self._connection and not self._connection.is_closed:
                     self._connection.close()
-                    self.logger.info("connection_closed")
+                self.logger.info("RabbitMQ connection closed")
             except Exception as e:
-                self.logger.error("close_connection_failed", 
-                                error=str(e))
+                self.logger.error("Failed to close connection", error=str(e))

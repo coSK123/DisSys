@@ -61,6 +61,7 @@ services:
     depends_on:
       rabbitmq:
         condition: service_healthy
+    restart: on-failure
     logging:
       driver: "json-file"
       options:
@@ -82,6 +83,7 @@ services:
     depends_on:
       rabbitmq:
         condition: service_healthy
+    restart: on-failure
 
   doener_service:
     build:
@@ -98,6 +100,7 @@ services:
     depends_on:
       rabbitmq:
         condition: service_healthy
+    restart: on-failure
 
   invoice_service:
     build:
@@ -114,6 +117,7 @@ services:
     depends_on:
       rabbitmq:
         condition: service_healthy
+    restart: on-failure
 
 volumes:
   rabbitmq_data:
