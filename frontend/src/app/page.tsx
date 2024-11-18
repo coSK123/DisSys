@@ -1,10 +1,10 @@
 import Hero from "@/components/Hero";
-import Header from "@/components/TopNavigation";
+import TopNavigation from "@/components/TopNavigation";
 
 export default function Home() {
   return (
     <div>
-      <Header />
+      <TopNavigation />
       <Hero />
     </div>
   );
