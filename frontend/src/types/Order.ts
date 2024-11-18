@@ -1,6 +1,6 @@
-import { Food } from "./Food"
+import { Food } from "./Food";
 
 export type OrderItem = {
   food: Food;
-  
-}
+  quantity: number;
+};
