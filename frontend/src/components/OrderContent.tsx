@@ -13,6 +13,7 @@ import {
   DialogTrigger,
 } from "./ui/dialog";
 import { Button } from "./ui/button";
+import Link from "next/link";
 
 export default function OrderContent({ foods }: { foods: Food[] }) {
   const [cart, setCart] = useState<OrderItem[]>([]);
@@ -84,14 +85,13 @@ export default function OrderContent({ foods }: { foods: Food[] }) {
               <Plus style={{ width: "1.5rem", height: "1.5rem" }} />
             </Button>
           </div>
-          <DialogClose asChild>
-            <Button
-              className="grow h-full rounded-full bg-orange-600 hover:bg-orange-700 active:bg-orange-800 text-xl font-bold"
-              onClick={onAddToCart}
-            >
-              {formatter.format(food.price * quantity)}
-            </Button>
-          </DialogClose>
+
+          <Button
+            className="grow h-full rounded-full bg-orange-600 hover:bg-orange-700 active:bg-orange-800 text-xl font-bold"
+            onClick={onAddToCart}
+          >
+            {formatter.format(food.price * quantity)}
+          </Button>
         </div>
       );
     };
@@ -151,14 +151,18 @@ export default function OrderContent({ foods }: { foods: Food[] }) {
     return (
       <Dialog>
         <DialogTrigger className="w-full min-h-12 rounded-full bg-orange-600 hover:bg-orange-700 active:bg-orange-800 space-x-1 flex items-center justify-center text-white">
-          <CheckoutButton />
+          <DialogClose asChild>
+            <CheckoutButton />
+          </DialogClose>
         </DialogTrigger>
         <DialogContent className="flex flex-col">
           <DialogHeader className="p-4">
             <DialogTitle>hi</DialogTitle>
           </DialogHeader>
           hi
-          <Button>bezahlen</Button>
+          <Link href="/order/checkout" legacyBehavior>
+            <Button>bezahlen</Button>
+          </Link>
         </DialogContent>
       </Dialog>
     );

@@ -73,7 +73,7 @@ const foods = [
 export default function OrderPage() {
   return (
     <div className="flex flex-col h-full">
-      <Header />
+      <Header heading="Speisekarte" href="/" />
       <OrderContent foods={foods} />
     </div>
   );
