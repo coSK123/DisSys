@@ -8,10 +8,13 @@ import asyncio
 from datetime import datetime
 from typing import Dict
 import structlog
+import threading
 
 app = FastAPI()
-mq = RabbitMQ()
 logger = setup_monitoring(app, 'doener_service')
+
+# Initialize mq as None and set it in startup
+mq = None
 
 class DoenerShopFinder:
     def __init__(self):
@@ -40,6 +43,14 @@ class DoenerShopFinder:
             raise
 
 shop_finder = DoenerShopFinder()
+
+def run_consumer(mq_instance):
+    """Run the consumer in a separate thread"""
+    try:
+        logger.info("Starting consumer thread")
+        mq_instance.start_consuming()
+    except Exception as e:
+        logger.error("Consumer thread error", error=str(e))
 
 @monitor_message_processing('doener_service')
 async def handle_doener_request(message: Dict) -> None:
@@ -95,8 +106,31 @@ def message_handler(ch, method, properties, body):
                     body=body)
         ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
 
-# Start consuming doener requests
-mq.consume('doener_requests', message_handler)
+@app.on_event("startup")
+async def startup_event():
+    global mq
+    logger.info("Starting doener service...")
+    try:
+        mq = RabbitMQ()
+        
+        # Set up consumer
+        mq.consume('doener_requests', message_handler)
+        
+        # Start consumer in a separate thread
+        consumer_thread = threading.Thread(target=run_consumer, args=(mq,), daemon=True)
+        consumer_thread.start()
+        
+        logger.info("Doener service startup completed successfully")
+    except Exception as e:
+        logger.error(f"Startup failed: {str(e)}")
+        raise
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    global mq
+    if mq:
+        mq.close()
+    logger.info("Doener service shutdown complete")
 
 @app.get("/health")
 async def health_check():

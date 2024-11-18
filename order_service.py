@@ -7,10 +7,13 @@ from datetime import datetime
 import structlog
 import asyncio
 from typing import Dict, Optional
+import threading
 
 app = FastAPI()
-mq = RabbitMQ()
 logger = setup_monitoring(app, 'order_service')
+
+# Initialize mq as None and set it in startup
+mq = None
 
 class OrderDatabase:
     def __init__(self):
@@ -44,6 +47,14 @@ class OrderDatabase:
 
 db = OrderDatabase()
 
+def run_consumer(mq_instance):
+    """Run the consumer in a separate thread"""
+    try:
+        logger.info("Starting consumer thread")
+        mq_instance.start_consuming()
+    except Exception as e:
+        logger.error("Consumer thread error", error=str(e))
+
 @monitor_message_processing('order_service')
 async def handle_order_request(message: Dict) -> None:
     try:
@@ -57,9 +68,7 @@ async def handle_order_request(message: Dict) -> None:
             payload={"status": OrderStatus.PROCESSING.value}
         )
 
-        logger.info("order_acknowledged",
-                   order_id=message["order_id"])
-                   
+        logger.info("order_acknowledged", order_id=message["order_id"])
         mq.publish("order_supplied", response.to_json())
         
     except Exception as e:
@@ -83,7 +92,6 @@ async def handle_doener_supplied(message: Dict) -> None:
             "status": message["payload"]["status"]
         })
         
-        # Request invoice
         invoice_request = Message(
             correlation_id=message["correlation_id"],
             order_id=message["order_id"],
@@ -127,9 +135,32 @@ def message_handler(ch, method, properties, body):
                     body=body)
         ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
 
-# Start consuming messages
-mq.consume('order_requests', message_handler)
-mq.consume('doener_supplied', message_handler)
+@app.on_event("startup")
+async def startup_event():
+    global mq
+    logger.info("Starting order service...")
+    try:
+        mq = RabbitMQ()
+        
+        # Set up consumers
+        mq.consume('order_requests', message_handler)
+        mq.consume('doener_supplied', message_handler)
+        
+        # Start consumer in a separate thread
+        consumer_thread = threading.Thread(target=run_consumer, args=(mq,), daemon=True)
+        consumer_thread.start()
+        
+        logger.info("Order service startup completed successfully")
+    except Exception as e:
+        logger.error(f"Startup failed: {str(e)}")
+        raise
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    global mq
+    if mq:
+        mq.close()
+    logger.info("Order service shutdown complete")
 
 @app.get("/orders/{order_id}")
 async def get_order(order_id: str):
