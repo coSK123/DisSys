@@ -1,10 +1,10 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from aio_pika import IncomingMessage
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from common.message_queue import RabbitMQ
+from common.mq_service import RabbitMQService
 from common.types import Message, OrderStatus, ServiceException
-from common.monitoring import setup_monitoring, monitor_message_processing
+from common.monitoring import monitor_message_processing
 import json
-import asyncio
 from typing import Dict, Optional
 from datetime import datetime
 import uuid
@@ -12,12 +12,10 @@ from pydantic import BaseModel
 import structlog
 from prometheus_client import Counter
 import logging
+from common.config import Config
 
 # Initialize FastAPI app
 app = FastAPI(title="Döner Order System")
-
-# Global variable to track initialization
-mq = None
 
 # Configure basic logging
 logging.basicConfig(
@@ -25,25 +23,6 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-
-# Initialize structlog
-structlog.configure(
-    processors=[
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.stdlib.add_log_level,
-        structlog.stdlib.PositionalArgumentsFormatter(),
-        structlog.processors.StackInfoRenderer(),
-        structlog.processors.format_exc_info,
-        structlog.processors.UnicodeDecoder(),
-        structlog.processors.JSONRenderer()
-    ],
-    context_class=dict,
-    logger_factory=structlog.stdlib.LoggerFactory(),
-    wrapper_class=structlog.stdlib.BoundLogger,
-    cache_logger_on_first_use=True,
-)
-
-struct_logger = structlog.get_logger()
 
 # Metrics
 websocket_connections = Counter('websocket_connections_total', 'Number of WebSocket connections')
@@ -58,6 +37,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Configuration Management
+class FrontendServiceSettings:
+    rabbitmq_url: str = Config.get_rabbitmq_url()
+    queues_to_verify: list[str] = Config.QUEUES
+    update_queues: list[str] = ["order_supplied", "doener_supplied", "invoice_supplied"]
+
+settings = FrontendServiceSettings()
+
+# Connection Manager
 class ConnectionManager:
     def __init__(self):
         self.active_connections: Dict[str, WebSocket] = {}
@@ -83,6 +71,8 @@ class ConnectionManager:
             except Exception as e:
                 self.logger.error("send_update_failed", order_id=order_id, error=str(e))
                 self.disconnect(order_id)
+        else:
+            self.logger.warning("can't update user, order id not found in active websocket connections", order_id=order_id)
 
 manager = ConnectionManager()
 
@@ -91,167 +81,99 @@ class OrderRequest(BaseModel):
     customer_id: str
     details: Optional[Dict] = None
 
+# Dependency for RabbitMQ
+def get_rabbitmq_service() -> RabbitMQService:
+    mq = app.state.rabbitmq_service
+
+    if not mq or not mq.connection or not mq.connection.connected:
+        raise HTTPException(status_code=503, detail="Message queue service unavailable")
+    return mq
+
 # Message Handlers
 @monitor_message_processing('frontend_service')
 async def handle_order_update(message: dict):
     """Handle updates from various services and forward to WebSocket"""
-    try:
-        order_id = message.get("order_id")
-        if not order_id:
-            raise ServiceException(message="Missing order_id in message", details=message)
-        await manager.send_update(order_id, message)
-    except Exception as e:
-        logger.error("order_update_failed", error=str(e), message=message)
+    order_id = message.get("order_id")
+    if not order_id:
+        raise ServiceException(message="Missing order_id in message", details=message)
+    await manager.send_update(order_id, message)
 
-def message_handler(ch, method, properties, body):
-    try:
-        if isinstance(body, bytes):
-            message = json.loads(body.decode('utf-8'))
-        else:
-            message = json.loads(body)
-        asyncio.run(handle_order_update(message))
-        ch.basic_ack(delivery_tag=method.delivery_tag)
-    except Exception as e:
-        logger.error("message_processing_failed", error=str(e))
-        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+async def message_handler(message: IncomingMessage):
+    async with message.process():
+        try:
+            message_body = json.loads(message.body.decode('utf-8'))
+            await handle_order_update(message_body)
+
+        except Exception as e:
+            logger.error(f"message_processing_failed: {e}")
 
 @app.on_event("startup")
 async def startup_event():
-    """
-    FastAPI startup event handler
-    """
-    global mq
+    """Startup event for initializing RabbitMQ"""
+    
     logger.info("Starting Frontend Service...")
     
-    try:
-        mq = RabbitMQ()
-        logger.info("RabbitMQ connection initialized")
-        
-        # Verify queues
-        queues_to_verify = ["doener_requests", "order_requests", "order_supplied", "doener_supplied", "invoice_supplied"]
-        for queue_name in queues_to_verify:
-            try:
-                mq._channel.queue_declare(queue=queue_name, passive=True)
-                logger.info(f"Queue verified: {queue_name}")
-            except Exception as e:
-                logger.error(f"Failed to verify queue {queue_name}: {str(e)}")
-                raise
-        
-        # Setup consumers for all update queues
-        update_queues = ["order_supplied", "doener_supplied", "invoice_supplied"]
-        for queue in update_queues:
-            mq.consume(queue, message_handler)
-            logger.info(f"Consumer set up for queue: {queue}")
-            
-        logger.info("Frontend Service startup completed successfully")
-        
-    except Exception as e:
-        logger.error(f"Startup failed: {str(e)}")
-        raise
+    mq_service = RabbitMQService(settings.rabbitmq_url)
+    await mq_service.initialize()
+
+    app.state.rabbitmq_service = mq_service
+    
+    await mq_service.verify_queues(settings.queues_to_verify)
+    
+    for queue_name in settings.update_queues:
+        await mq_service.consume(queue_name, message_handler)
+    
+    logger.info("Frontend Service started successfully")
 
 @app.post("/order/doener")
-async def create_order(order: OrderRequest):
+async def create_order(order: OrderRequest, mq_service: RabbitMQService = Depends(get_rabbitmq_service)):
     """Create a new döner order"""
-    logger.info(f"Received order request for customer: {order.customer_id}")
+    order_id = str(uuid.uuid4())
+    correlation_id = str(uuid.uuid4())
     
-    try:
-        if not mq or not mq._connection or mq._connection.is_closed:
-            logger.error("RabbitMQ connection not available")
-            raise HTTPException(
-                status_code=503,
-                detail="Message queue service unavailable"
-            )
-        
-        order_id = str(uuid.uuid4())
-        correlation_id = str(uuid.uuid4())
-        
-        message = Message(
-            correlation_id=correlation_id,
-            order_id=order_id,
-            timestamp=datetime.now(),
-            message_type="ORDER_CREATED",
-            payload={
-                "customer_id": order.customer_id,
-                "status": OrderStatus.CREATED.value,
-                "details": order.details
-            }
-        )
-        
-        message_json = message.to_json()
-        logger.debug(f"Prepared message: {message_json}")
-        
-        doener_success = mq.publish("doener_requests", message_json)
-        order_success = mq.publish("order_requests", message_json)
-        
-        if not doener_success or not order_success:
-            logger.error(f"Failed to publish messages. Doener: {doener_success}, Order: {order_success}")
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to process order"
-            )
-            
-        logger.info(f"Order created successfully. Order ID: {order_id}")
-        
-        return {
-            "order_id": order_id,
-            "correlation_id": correlation_id,
-            "websocket_url": f"/ws/{order_id}",
-            "status": "created"
+    message = Message(
+        correlation_id=correlation_id,
+        order_id=order_id,
+        timestamp=datetime.now(),
+        message_type="ORDER_CREATED",
+        payload={
+            "customer_id": order.customer_id,
+            "status": OrderStatus.CREATED.value,
+            "details": order.details
         }
-        
-    except Exception as e:
-        logger.error(f"Error creating order: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail={"message": "Failed to create order", "error": str(e)}
-        )
+    )
+    
+    message_json = message.to_json()
+    await mq_service.publish("doener_requests", message_json)
+    await mq_service.publish("order_requests", message_json)
+    
+    return {
+        "order_id": order_id,
+        "correlation_id": correlation_id,
+        "websocket_url": f"/ws/{order_id}",
+        "status": "created"
+    }
 
-@app.get("/status")
-async def get_status():
+@app.get("/health")
+async def get_status(mq_service: RabbitMQService = Depends(get_rabbitmq_service)):
     """Get service status"""
-    try:
-        if not mq:
-            return {
-                "status": "unhealthy",
-                "rabbitmq_status": "not_initialized",
-                "service": "frontend_service"
-            }
-            
-        mq._ensure_connection()
-        rabbitmq_status = "connected" if mq._connection and mq._connection.is_open else "disconnected"
-        
-        return {
-            "status": "healthy",
-            "rabbitmq_status": rabbitmq_status,
-            "service": "frontend_service",
-            "queues": ["doener_requests", "order_requests", "order_supplied", "doener_supplied", "invoice_supplied"]
-        }
-    except Exception as e:
-        logger.error(f"Status check failed: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail={"message": "Service unhealthy", "error": str(e)}
-        )
+    rabbitmq_status = "connected" if mq_service.connection and mq_service.connection.connected else "disconnected"
+    return {"status": "healthy", "rabbitmq_status": rabbitmq_status}
 
 @app.websocket("/ws/{order_id}")
 async def websocket_endpoint(websocket: WebSocket, order_id: str):
     await manager.connect(order_id, websocket)
     try:
         while True:
-            data = await websocket.receive_text()
-            logger.debug("websocket_message_received", order_id=order_id, data=data)
+            await websocket.receive_text()
     except WebSocketDisconnect:
-        manager.disconnect(order_id)
-    except Exception as e:
-        logger.error("websocket_error", order_id=order_id, error=str(e))
         manager.disconnect(order_id)
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Shutdown event handler"""
-    logger.info("Shutting down Frontend Service...")
-    if mq:
-        mq.close()
+    """Shutdown event for closing RabbitMQ connection"""
+    mq_service = app.state.rabbitmq_service
+    if mq_service:
+        await mq_service.close()
     for order_id in list(manager.active_connections.keys()):
         manager.disconnect(order_id)
-    logger.info("Frontend Service shutdown complete")

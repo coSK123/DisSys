@@ -1,33 +1,42 @@
-from fastapi import FastAPI
-from common.message_queue import RabbitMQ
+from fastapi import FastAPI, Depends, HTTPException
 from common.types import Message, ServiceException, OrderStatus
-from common.monitoring import setup_monitoring, monitor_message_processing
+from common.monitoring import monitor_message_processing
+from common.mq_service import RabbitMQService
+from common.config import Config
 import json
 from datetime import datetime
 import structlog
-import asyncio
-import threading
 
-app = FastAPI()
-logger = setup_monitoring(app, 'invoice_service')
+# Initialize FastAPI app
+app = FastAPI(title="Invoice Service")
+logger = structlog.get_logger()
 
-# Initialize mq as None and set it in startup
-mq = None
 
-def run_consumer(mq_instance):
-    """Run the consumer in a separate thread"""
-    try:
-        logger.info("Starting consumer thread")
-        mq_instance.start_consuming()
-    except Exception as e:
-        logger.error("Consumer thread error", error=str(e))
+# Configuration
+class InvoiceServiceSettings:
+    rabbitmq_url: str = Config.get_rabbitmq_url()
+    queues_to_verify: list[str] = Config.QUEUES
+    invoice_queue: str = "invoice_requests"
+    response_queue: str = "invoice_supplied"
+
+
+settings = InvoiceServiceSettings()
+
+
+# Dependency for RabbitMQ
+def get_rabbitmq_service() -> RabbitMQService:
+    mq = app.state.rabbitmq_service
+    if not mq or not mq.connection:
+        raise HTTPException(status_code=503, detail="Message queue service unavailable")
+    return mq
+
 
 @monitor_message_processing('invoice_service')
-async def create_invoice(message: dict) -> None:
+async def create_invoice(message: dict, mq_service: RabbitMQService) -> None:
+    """Process invoice creation requests."""
     try:
-        logger.info("creating_invoice",
-                   order_id=message["order_id"])
-        
+        logger.info("creating_invoice", order_id=message["order_id"])
+
         if "payload" not in message or "price" not in message["payload"]:
             raise ServiceException(
                 message="Invalid message format",
@@ -45,13 +54,13 @@ async def create_invoice(message: dict) -> None:
                 "status": OrderStatus.INVOICED.value
             }
         )
-        
+
         logger.info("invoice_created",
-                   order_id=message["order_id"],
-                   invoice_id=response.payload["invoice_id"])
-                   
-        mq.publish("invoice_supplied", response.to_json())
-        
+                    order_id=message["order_id"],
+                    invoice_id=response.payload["invoice_id"])
+
+        await mq_service.publish(settings.response_queue, response.to_json())
+
     except Exception as e:
         error_response = Message(
             correlation_id=message["correlation_id"],
@@ -61,51 +70,48 @@ async def create_invoice(message: dict) -> None:
             payload={"status": OrderStatus.FAILED.value},
             error={"message": str(e), "type": type(e).__name__}
         )
-        mq.publish("invoice_supplied", error_response.to_json())
+        await mq_service.publish(settings.response_queue, error_response.to_json())
         raise
 
-def message_handler(ch, method, properties, body):
-    try:
-        if isinstance(body, bytes):
-            message = json.loads(body.decode('utf-8'))
-        else:
-            message = json.loads(body)
 
-        asyncio.run(create_invoice(message))
-        ch.basic_ack(delivery_tag=method.delivery_tag)
-        
+async def message_handler(message):
+    """Handle RabbitMQ messages."""
+    try:
+        message_body = json.loads(message.body.decode("utf-8"))
+        await create_invoice(message_body, app.state.rabbitmq_service)
+        await message.ack()
     except Exception as e:
-        logger.error("message_processing_failed",
-                    error=str(e),
-                    body=body)
-        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+        logger.error("message_processing_failed", error=str(e), message=message.body)
+        raise
+
 
 @app.on_event("startup")
 async def startup_event():
-    global mq
-    logger.info("Starting invoice service...")
-    try:
-        mq = RabbitMQ()
-        
-        # Set up consumer
-        mq.consume("invoice_requests", message_handler)
-        
-        # Start consumer in a separate thread
-        consumer_thread = threading.Thread(target=run_consumer, args=(mq,), daemon=True)
-        consumer_thread.start()
-        
-        logger.info("Invoice service startup completed successfully")
-    except Exception as e:
-        logger.error(f"Startup failed: {str(e)}")
-        raise
+    """Startup event for initializing RabbitMQ and consuming messages."""
+    logger.info("Starting Invoice Service...")
+
+    mq_service = RabbitMQService(settings.rabbitmq_url)
+    await mq_service.initialize()
+
+    app.state.rabbitmq_service = mq_service
+
+    await mq_service.verify_queues(settings.queues_to_verify)
+    await mq_service.consume(settings.invoice_queue, message_handler)
+
+    logger.info("Invoice Service started successfully")
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    global mq
-    if mq:
-        mq.close()
-    logger.info("Invoice service shutdown complete")
+    """Shutdown event to clean up resources."""
+    mq_service = app.state.rabbitmq_service
+    if mq_service:
+        await mq_service.close()
+    logger.info("Invoice Service shutdown completed")
+
 
 @app.get("/health")
-async def health_check():
-    return {"status": "healthy", "service": "invoice_service"}
+async def health_check(mq_service: RabbitMQService = Depends(get_rabbitmq_service)):
+    """Health check endpoint."""
+    rabbitmq_status = "connected" if mq_service.connection and mq_service.connection.connected else "disconnected"
+    return {"status": "healthy", "service": "invoice_service", "rabbitmq_status": rabbitmq_status}

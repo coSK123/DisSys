@@ -15,14 +15,14 @@ class Config:
     SERVICE_NAME = os.getenv('SERVICE_NAME', 'unknown')
     
     # Queue Configuration
-    QUEUE_SETTINGS = {
-        'doener_requests': {'durable': True},
-        'order_requests': {'durable': True},
-        'invoice_requests': {'durable': True},
-        'order_supplied': {'durable': True},
-        'doener_supplied': {'durable': True},
-        'invoice_supplied': {'durable': True}
-    }
+    QUEUES = [
+        'doener_requests',
+        'order_requests',
+        'invoice_requests',
+        'order_supplied',
+        'doener_supplied',
+        'invoice_supplied',
+    ]
     
     # Dead Letter Exchange Configuration
     DLX_EXCHANGE = 'dlx'
@@ -34,3 +34,7 @@ class Config:
     
     # Monitoring Configuration
     PROMETHEUS_PORT = int(os.getenv('PROMETHEUS_PORT', 8000))
+
+    @staticmethod
+    def get_rabbitmq_url():
+        return f'amqp://{Config.RABBITMQ_USER}:{Config.RABBITMQ_PASS}@{Config.RABBITMQ_HOST}:{Config.RABBITMQ_PORT}'

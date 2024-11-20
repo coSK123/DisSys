@@ -60,7 +60,7 @@
         let ws = null;
 
         function connect(orderId) {
-            ws = new WebSocket(`ws://localhost:8000/ws/${orderId}`);
+            ws = new WebSocket(`ws://localhost:8080/ws/${orderId}`);
             
             ws.onmessage = function(event) {
                 const update = JSON.parse(event.data);
@@ -80,7 +80,7 @@
             const customerId = document.getElementById('customerId').value;
             
             try {
-                const response = await fetch('http://localhost:8000/order/doener', {
+                const response = await fetch('http://localhost:8080/order/doener', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
