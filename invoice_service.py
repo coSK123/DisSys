@@ -1,4 +1,7 @@
+import asyncio
 from fastapi import FastAPI, Depends, HTTPException
+from prometheus_client import make_asgi_app
+
 from common.types import Message, ServiceException, OrderStatus
 from common.monitoring import monitor_message_processing
 from common.mq_service import RabbitMQService
@@ -9,13 +12,15 @@ import structlog
 
 # Initialize FastAPI app
 app = FastAPI(title="Invoice Service")
+metrics_app = make_asgi_app()
+app.mount("/metrics", metrics_app)
 logger = structlog.get_logger()
 
 
 # Configuration
 class InvoiceServiceSettings:
     rabbitmq_url: str = Config.get_rabbitmq_url()
-    queues_to_verify: list[str] = Config.QUEUES
+    service_name: str = "invoice_service"
     invoice_queue: str = "invoice_requests"
     response_queue: str = "invoice_supplied"
 
@@ -33,6 +38,9 @@ def get_rabbitmq_service() -> RabbitMQService:
 
 @monitor_message_processing('invoice_service')
 async def create_invoice(message: dict, mq_service: RabbitMQService) -> None:
+    # sleep to simulate
+    await asyncio.sleep(0.5)
+
     """Process invoice creation requests."""
     try:
         logger.info("creating_invoice", order_id=message["order_id"])
@@ -82,6 +90,7 @@ async def message_handler(message):
         await message.ack()
     except Exception as e:
         logger.error("message_processing_failed", error=str(e), message=message.body)
+        await message.nack(requeue=True)
         raise
 
 
@@ -90,12 +99,11 @@ async def startup_event():
     """Startup event for initializing RabbitMQ and consuming messages."""
     logger.info("Starting Invoice Service...")
 
-    mq_service = RabbitMQService(settings.rabbitmq_url)
+    mq_service = RabbitMQService(settings.service_name, settings.rabbitmq_url)
     await mq_service.initialize()
 
     app.state.rabbitmq_service = mq_service
 
-    await mq_service.verify_queues(settings.queues_to_verify)
     await mq_service.consume(settings.invoice_queue, message_handler)
 
     logger.info("Invoice Service started successfully")

@@ -1,0 +1,64 @@
+{
+  "title": "Microservices Dashboard",
+  "panels": [
+    {
+      "title": "Message Processing Rate",
+      "type": "graph",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "targets": [{
+        "expr": "rate(processed_messages_total[5m])",
+        "legendFormat": "{{service}} - {{message_type}}"
+      }]
+    },
+    {
+      "title": "Processing Errors",
+      "type": "graph",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "targets": [{
+        "expr": "rate(processing_errors_total[5m])",
+        "legendFormat": "{{service}} - {{error_type}}"
+      }]
+    },
+    {
+      "title": "Processing Time (95th Percentile)",
+      "type": "graph",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "targets": [{
+        "expr": "histogram_quantile(0.95, rate(message_processing_seconds_bucket[5m]))",
+        "legendFormat": "{{service}} - {{message_type}}"
+      }]
+    },
+    {
+      "title": "RabbitMQ Queue Size",
+      "type": "graph",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "targets": [{
+        "expr": "rabbitmq_queue_messages_ready",
+        "legendFormat": "{{queue}}"
+      }]
+    },
+    {
+      "title": "Service Health Status",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 24, "x": 0, "y": 16},
+      "targets": [{
+        "expr": "up",
+        "legendFormat": "{{job}}"
+      }]
+    },
+    {
+      "title": "Error Rate Alert",
+      "type": "alert-list",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 20}
+    }
+  ],
+  "refresh": "10s",
+  "tags": ["microservices", "rabbitmq"],
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": ["5s", "10s", "30s", "1m", "5m", "15m", "30m", "1h"]
+  }
+}

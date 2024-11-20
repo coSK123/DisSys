@@ -10,12 +10,14 @@ from datetime import datetime
 import uuid
 from pydantic import BaseModel
 import structlog
-from prometheus_client import Counter
+from prometheus_client import Counter, make_asgi_app
 import logging
 from common.config import Config
 
 # Initialize FastAPI app
 app = FastAPI(title="Döner Order System")
+metrics_app = make_asgi_app()
+app.mount("/metrics", metrics_app)
 
 # Configure basic logging
 logging.basicConfig(
@@ -40,7 +42,7 @@ app.add_middleware(
 # Configuration Management
 class FrontendServiceSettings:
     rabbitmq_url: str = Config.get_rabbitmq_url()
-    queues_to_verify: list[str] = Config.QUEUES
+    service_name: str = "frontend_service"
     update_queues: list[str] = ["order_supplied", "doener_supplied", "invoice_supplied"]
 
 settings = FrontendServiceSettings()
@@ -99,13 +101,15 @@ async def handle_order_update(message: dict):
     await manager.send_update(order_id, message)
 
 async def message_handler(message: IncomingMessage):
-    async with message.process():
-        try:
-            message_body = json.loads(message.body.decode('utf-8'))
-            await handle_order_update(message_body)
 
-        except Exception as e:
-            logger.error(f"message_processing_failed: {e}")
+    try:
+        message_body = json.loads(message.body.decode("utf-8"))
+        await handle_order_update(message_body)
+        await message.ack()
+    except Exception as e:
+        logger.error("message_processing_failed")
+        await message.nack(requeue=True)
+        raise
 
 @app.on_event("startup")
 async def startup_event():
@@ -113,12 +117,10 @@ async def startup_event():
     
     logger.info("Starting Frontend Service...")
     
-    mq_service = RabbitMQService(settings.rabbitmq_url)
+    mq_service = RabbitMQService(settings.service_name, settings.rabbitmq_url)
     await mq_service.initialize()
 
     app.state.rabbitmq_service = mq_service
-    
-    await mq_service.verify_queues(settings.queues_to_verify)
     
     for queue_name in settings.update_queues:
         await mq_service.consume(queue_name, message_handler)
@@ -144,7 +146,6 @@ async def create_order(order: OrderRequest, mq_service: RabbitMQService = Depend
     )
     
     message_json = message.to_json()
-    await mq_service.publish("doener_requests", message_json)
     await mq_service.publish("order_requests", message_json)
     
     return {

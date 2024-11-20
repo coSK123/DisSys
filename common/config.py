@@ -23,6 +23,7 @@ class Config:
         'doener_supplied',
         'invoice_supplied',
     ]
+
     
     # Dead Letter Exchange Configuration
     DLX_EXCHANGE = 'dlx'

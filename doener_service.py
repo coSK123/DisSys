@@ -1,4 +1,6 @@
 from fastapi import FastAPI, Depends, HTTPException
+from prometheus_client import make_asgi_app
+
 from common.types import Message, ServiceException, OrderStatus
 from common.monitoring import monitor_message_processing
 from common.mq_service import RabbitMQService
@@ -12,12 +14,14 @@ import structlog
 
 # Initialize FastAPI app
 app = FastAPI(title="Döner Assignment Service")
+metrics_app = make_asgi_app()
+app.mount("/metrics", metrics_app)
 logger = structlog.get_logger()
 
 # Configuration
 class DoenerServiceSettings:
     rabbitmq_url: str = Config.get_rabbitmq_url()
-    queues_to_verify: list[str] = Config.QUEUES
+    service_name: str = "doener_service"
     update_queue: str = "doener_requests"
     response_queue: str = "doener_supplied"
 
@@ -35,7 +39,8 @@ class DoenerShopFinder:
     async def find_available_shop(self, message: Dict) -> Dict:
         """Simulate finding an available shop."""
         try:
-            await asyncio.sleep(0.5)  # Simulate HTTP call latency
+
+            await asyncio.sleep(1.5) # HTTP latency simulated
             shop = random.choice(self.shops)
             if not shop:
                 raise ServiceException(
@@ -99,6 +104,7 @@ async def message_handler(message):
         await message.ack()
     except Exception as e:
         logger.error("message_processing_failed", error=str(e), message=message.body)
+        await message.nack(requeue=True)
         raise
 
 @app.on_event("startup")
@@ -106,12 +112,11 @@ async def startup_event():
     """Startup event for initializing RabbitMQ and consuming messages."""
     logger.info("Starting Döner Assignment Service...")
     
-    mq_service = RabbitMQService(settings.rabbitmq_url)
+    mq_service = RabbitMQService(settings.service_name, settings.rabbitmq_url)
     await mq_service.initialize()
     
     app.state.rabbitmq_service = mq_service
-    
-    await mq_service.verify_queues(settings.queues_to_verify)
+
     await mq_service.consume(settings.update_queue, message_handler)
     
     logger.info("Döner Assignment Service started successfully")
