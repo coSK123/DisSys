@@ -180,9 +180,11 @@ export default function OrderContent({ foods }: { foods: Food[] }) {
           ))}
         </ul>
       </section>
-      <div className="sticky bottom-0 rounded-t-lg w-full outline outline-gray-200 outline-1 px-2 pt-2 pb-8">
-        <CartDialog />
-      </div>
+      {cart.length > 0 && (
+        <div className="sticky bottom-0 rounded-t-lg w-full outline outline-gray-200 outline-1 px-2 pt-2 pb-8">
+          <CartDialog />
+        </div>
+      )}
     </>
   );
 }
