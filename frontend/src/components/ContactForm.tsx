@@ -58,8 +58,72 @@ export default function ContactForm() {
     },
   });
 
+  const connect = (orderId: string) => {
+    const ws = new WebSocket(`ws://localhost:8080/ws/${orderId}`);
+
+    ws.onmessage = function (event) {
+      const update = JSON.parse(event.data);
+      addUpdate(update);
+    };
+
+    ws.onclose = function () {
+      console.log("WebSocket connection closed");
+    };
+
+    ws.onerror = function (error) {
+      console.error("WebSocket error:", error);
+    };
+  };
+
+  const placeOrder = async () => {
+    const customerId = "CUST123";
+
+    try {
+      const response = await fetch("http://localhost:8080/order/doener", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          customer_id: customerId,
+          details: {
+            notes: "Extra sauce please",
+          },
+        }),
+      });
+
+      const data = await response.json();
+      console.log("Order placed:", data);
+
+      // Connect to WebSocket for updates
+      connect(data.order_id);
+
+      // Add initial update
+      addUpdate({
+        message_type: "ORDER_CREATED",
+        order_id: data.order_id,
+        timestamp: new Date().toISOString(),
+        payload: {
+          status: "Order placed successfully",
+        },
+      });
+    } catch (error) {
+      console.error("Error placing order:", error);
+    }
+  };
+
+  const addUpdate = (update: {
+    message_type: string;
+    order_id: string;
+    timestamp: string;
+    payload: { status: string };
+  }) => {
+    console.log("New update:", update);
+  };
+
   function onSubmit(values: z.infer<ReturnType<typeof formSchema>>) {
     console.log(values);
+    placeOrder();
   }
 
   return (
