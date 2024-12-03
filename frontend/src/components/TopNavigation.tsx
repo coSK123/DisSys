@@ -9,7 +9,7 @@ export default function TopNavigation() {
       name: "Firmenbestellungen",
       icon: <UserRound />,
     },
-    { href: "/", name: "Partner werden", icon: <Store /> },
+    { href: "/order", name: "Partner werden", icon: <Store /> },
   ];
 
   const NavLink = ({
