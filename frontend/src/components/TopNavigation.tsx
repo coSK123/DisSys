@@ -5,11 +5,11 @@ import { Store, UserRound } from "lucide-react";
 export default function TopNavigation() {
   const links = [
     {
-      href: "/corporate-orders",
+      href: "/",
       name: "Firmenbestellungen",
       icon: <UserRound />,
     },
-    { href: "/partner", name: "Partner werden", icon: <Store /> },
+    { href: "/", name: "Partner werden", icon: <Store /> },
   ];
 
   const NavLink = ({
