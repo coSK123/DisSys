@@ -15,9 +15,9 @@ scrape_configs:
     static_configs:
       - targets: ['order_service:8081']
 
-  - job_name: 'frontend_service'
+  - job_name: 'api_service'
     static_configs:
-      - targets: ['frontend_service:8080']
+      - targets: ['api_service:8080']
 
   - job_name: 'rabbitmq'
     metrics_path: /metrics

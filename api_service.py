@@ -40,12 +40,12 @@ app.add_middleware(
 )
 
 # Configuration Management
-class FrontendServiceSettings:
+class ApiServiceSettings:
     rabbitmq_url: str = Config.get_rabbitmq_url()
-    service_name: str = "frontend_service"
+    service_name: str = "api_service"
     update_queues: list[str] = ["order_supplied", "doener_supplied", "invoice_supplied"]
 
-settings = FrontendServiceSettings()
+settings = ApiServiceSettings()
 
 # Connection Manager
 class ConnectionManager:
@@ -92,7 +92,7 @@ def get_rabbitmq_service() -> RabbitMQService:
     return mq
 
 # Message Handlers
-@monitor_message_processing('frontend_service')
+@monitor_message_processing('api_service')
 async def handle_order_update(message: dict):
     """Handle updates from various services and forward to WebSocket"""
     order_id = message.get("order_id")
