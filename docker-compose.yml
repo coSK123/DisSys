@@ -32,7 +32,7 @@ services:
       - '--storage.tsdb.path=/prometheus'
       - '--web.enable-lifecycle'
     depends_on:
-      - frontend_service
+      - api_service
       - order_service
       - doener_service
       - invoice_service
@@ -50,18 +50,18 @@ services:
     depends_on:
       - prometheus
 
-  frontend_service:
+  api_service:
     build: 
       context: .
       dockerfile: Dockerfile
-    command: uvicorn frontend_service:app --host 0.0.0.0 --port 8080 --reload
+    command: uvicorn api_service:app --host 0.0.0.0 --port 8080 --reload
     ports:
       - "8080:8080"
     volumes:
       - .:/app
     environment:
       - RABBITMQ_HOST=rabbitmq
-      - SERVICE_NAME=frontend_service
+      - SERVICE_NAME=api_service
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -129,7 +129,7 @@ services:
     ports:
       - "3001:3001"
     depends_on:
-      - frontend_service
+      - api_service
       - order_service
       - doener_service
       - invoice_service

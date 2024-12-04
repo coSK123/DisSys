@@ -2,6 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
+import validator from "validator";
 import { z } from "zod";
 import {
   Form,
@@ -13,43 +14,25 @@ import {
 } from "./ui/form";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
-import validator from "validator";
+import { Message, MessageType } from "@/types/Message";
 
-const enum ShippingType {
-  DELIVERY = "delivery",
-  PICKUP = "pickup",
-}
+const formSchema = z.object({
+  personalInformation: z.object({
+    name: z.string().min(3),
+    email: z.string().email(),
+    phone: z.string().refine(validator.isMobilePhone),
+  }),
+});
 
-const formSchema = (shippingType: ShippingType) =>
-  z.object({
-    address:
-      shippingType === ShippingType.DELIVERY
-        ? z.object({
-            street: z.string(),
-            houseNumber: z.string(),
-            postalCode: z.string(),
-            city: z.string().min(3),
-          })
-        : z.object({}),
-    personalInformation: z.object({
-      name: z.string().min(3),
-      email: z.string().email(),
-      phone: z.string().refine(validator.isMobilePhone),
-    }),
-  });
-
-export default function ContactForm() {
-  const shippingType = ShippingType.PICKUP;
-  const form = useForm<z.infer<ReturnType<typeof formSchema>>>({
+export default function DoenerForm({
+  addUpdate,
+}: {
+  addUpdate: (update: Message) => void;
+}) {
+  const form = useForm<z.infer<typeof formSchema>>({
     mode: "onBlur",
-    resolver: zodResolver(formSchema(shippingType)),
+    resolver: zodResolver(formSchema),
     defaultValues: {
-      address: {
-        street: "",
-        houseNumber: "",
-        postalCode: "",
-        city: "",
-      },
       personalInformation: {
         name: "",
         email: "",
@@ -76,7 +59,7 @@ export default function ContactForm() {
   };
 
   const placeOrder = async () => {
-    const customerId = "CUST123";
+    const customerId = "PLACEHOLDER_CUSTOMER_ID";
 
     try {
       const response = await fetch("http://localhost:8080/order/doener", {
@@ -87,7 +70,7 @@ export default function ContactForm() {
         body: JSON.stringify({
           customer_id: customerId,
           details: {
-            notes: "Extra sauce please",
+            notes: "Mit Alles und scharf",
           },
         }),
       });
@@ -97,31 +80,24 @@ export default function ContactForm() {
 
       // Connect to WebSocket for updates
       connect(data.order_id);
-
       // Add initial update
       addUpdate({
-        message_type: "ORDER_CREATED",
-        order_id: data.order_id,
+        correlation_id: "PLACEHOLDER_CORRELATION_ID",
+        message_type: MessageType.ORDER_CREATED,
+        order_id: data.order_id as string,
+        error: null,
         timestamp: new Date().toISOString(),
         payload: {
           status: "Order placed successfully",
         },
+        version: "0.0",
       });
     } catch (error) {
       console.error("Error placing order:", error);
     }
   };
 
-  const addUpdate = (update: {
-    message_type: string;
-    order_id: string;
-    timestamp: string;
-    payload: { status: string };
-  }) => {
-    console.log("New update:", update);
-  };
-
-  function onSubmit(values: z.infer<ReturnType<typeof formSchema>>) {
+  function onSubmit(values: z.infer<typeof formSchema>) {
     console.log(values);
     placeOrder();
   }
@@ -196,7 +172,7 @@ export default function ContactForm() {
           type="submit"
           className="h-12 rounded-full text-xl font-bold bg-orange-600 hover:bg-orange-700 active:bg-orange-800 text-white"
         >
-          Bestellen und bezahlen
+          Kostenpflichtig bestellen
         </Button>
       </form>
     </Form>
