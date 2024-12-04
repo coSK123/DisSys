@@ -1,16 +1,9 @@
 import Link from "next/link";
 import { Button } from "./ui/button";
-import { Store, UserRound } from "lucide-react";
+import { Store } from "lucide-react";
 
 export default function TopNavigation() {
-  const links = [
-    {
-      href: "/",
-      name: "Firmenbestellungen",
-      icon: <UserRound />,
-    },
-    { href: "/order", name: "Partner werden", icon: <Store /> },
-  ];
+  const links = [{ href: "/order", name: "Partner werden", icon: <Store /> }];
 
   const NavLink = ({
     href,
@@ -25,6 +18,7 @@ export default function TopNavigation() {
       <Link href={href} legacyBehavior key={href}>
         <Button
           variant="ghost"
+          disabled
           className="rounded-full text-lg font-semibold p-6"
         >
           {icon}
@@ -39,7 +33,7 @@ export default function TopNavigation() {
       <div className="flex items-center space-x-4">
         {/* Placeholder for logo */}
         <Link href="/" className="text-xl font-semibold text-orange-600">
-          Lieferando
+          Dönerando
         </Link>
       </div>
       <nav className="flex space-x-6">{links.map((link) => NavLink(link))}</nav>
