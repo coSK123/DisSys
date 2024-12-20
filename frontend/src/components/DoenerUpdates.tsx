@@ -20,7 +20,6 @@ export default function DoenerUpdates() {
     setUpdate(update);
     if (update.message_type === MessageType.DOENER_ASSIGNED)
       setShop(update.payload.shop);
-    console.log(update);
   };
 
   const renderProgress = () => {

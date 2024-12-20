@@ -58,8 +58,9 @@ export default function DoenerForm({
     };
   };
 
-  const placeOrder = async () => {
-    const customerId = "PLACEHOLDER_CUSTOMER_ID";
+  const placeOrder = async (values: z.infer<typeof formSchema>) => {
+    // simple ID generation
+    const customerId = values.personalInformation.name;
 
     try {
       const response = await fetch("http://localhost:8080/order/doener", {
@@ -76,7 +77,6 @@ export default function DoenerForm({
       });
 
       const data = await response.json();
-      console.log("Order placed:", data);
 
       // Connect to WebSocket for updates
       connect(data.order_id);
@@ -98,8 +98,7 @@ export default function DoenerForm({
   };
 
   function onSubmit(values: z.infer<typeof formSchema>) {
-    console.log(values);
-    placeOrder();
+    placeOrder(values);
   }
 
   return (
